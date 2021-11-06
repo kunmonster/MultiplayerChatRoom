@@ -23,7 +23,7 @@ std::mutex mtx;  //定义一个mutex对象,互斥量
 HANDLE client_mutex[MAX_CLIENT_NUM] = {0};        //每个用户的互斥量
 
 
-// HANDLE mutex = CreateMutex(NULL,FALSE,NULL);
+HANDLE mutex = CreateMutex(NULL,FALSE,NULL);
 
 
 Server::Server() {
