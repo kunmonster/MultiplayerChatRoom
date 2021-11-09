@@ -3,13 +3,14 @@
 
 #include <windows.h>
 #include <winsock2.h>
+#include"public_detail.h"
 
 #pragma comment(lib, "ws2_32.lib")
-#define BUFFER_LEN 1024
+// #define BUFFER_LEN 1024
 #define MAX_CLIENT_NUM 32
-#define SERVER_PORT 8888
-#define IP_BUF_SIZE 129
-#define NAME_LEN 64
+// #define SERVER_PORT 8888
+// #define IP_BUF_SIZE 129
+// #define NAME_LEN 64
 void init_server();
 
 /**

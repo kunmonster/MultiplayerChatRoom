@@ -1,5 +1,4 @@
-#include <server_detail.h>
-#include <windns.h>
+#include <windows.h>
 #include <winsock2.h>
 
 #include <condition_variable>
@@ -7,6 +6,8 @@
 #include <mutex>
 #include <queue>
 #include <thread>
+
+#include "server_detail.h"
 
 #pragma comment(lib, "ws2_32.lib")
 using namespace std;
@@ -27,11 +28,14 @@ int current_client_num = 0;
 DWORD send_thread[MAX_CLIENT_NUM];
 DWORD chat_thread[MAX_CLIENT_NUM];
 
-std::mutex current_client_num_mtx;  //用户数量互斥量
-std::mutex mtx;                     //定义一个mutex对象,互斥量
-std::condition_variable cv;
+std::mutex current_client_num_mtx;          //用户数量互斥量
+std::mutex mtx;                             //定义一个mutex对象,互斥量
 HANDLE client_mutex[MAX_CLIENT_NUM] = {0};  //用户数组每个用户的互斥量
-
+HANDLE client_semaphore[MAX_CLIENT_NUM] = {0};  //定义用户信号量
+/***
+ * CLASS SERVER FUNCTION
+ *
+ */
 Server::Server() {
   cout << "服务端启动中" << endl;
   winsock_ver = MAKEWORD(2, 2);
@@ -89,7 +93,7 @@ Server::~Server() {
   cout << "服务端关闭" << endl;
 }
 
-DWORD WINAPI ChattClientThrea(LPVOID client_info);
+void* WINAPI ChatClientThrea(LPVOID client_info);
 
 void Server::WaitClient() {
   int sum = 0;
@@ -109,6 +113,7 @@ void Server::WaitClient() {
       }
     } else {
       if (send(client_socket, "OK", strlen("OK"), 0) < 0) {
+        cout<<WSAGetLastError()<<endl;
         perror("ok");
       }
     }
@@ -129,7 +134,6 @@ void Server::WaitClient() {
     for (int i = 0; i < MAX_CLIENT_NUM; i++) {
       if (!client[i].status) {
         //找到空的位置,然后将该用户放进去
-        // ::unique_lock<std::mutex> lck(current_client_num_mtx);
         ::current_client_num_mtx.lock();
         //加锁
         memset(client[i].username, 0, NAME_LEN);
@@ -137,12 +141,14 @@ void Server::WaitClient() {
         client[i].userId = i;
         client[i].status = 1;
         client[i].socket = client_socket;
-        ::client_mutex[i] = ::CreateMutex(
-            NULL, FALSE, NULL);  //用户信息填充完毕,为该用户创建互斥量
+        //用户信息填充完毕,为该用户创建互斥量
+        ::client_mutex[i] = ::CreateMutex(NULL, FALSE, NULL);
         ::current_client_num++;
+        //为用户创建信号量,初始化为1
+        ::client_semaphore[i] = ::CreateSemaphore(NULL, 0, BUFFER_LEN, NULL);
         ::current_client_num_mtx.unlock();
-        CreateThread(NULL, 0, ChattClientThrea, (void*)&client[i], 0,
-                     &::chat_thread[i]);
+        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ChatClientThrea,
+                     (void*)&client[i], 0, &::chat_thread[i]);
         std::cout << client[i].username << " "
                   << "join in the chat room. Online User Number:"
                   << current_client_num << endl;
@@ -158,12 +164,15 @@ void Server::WaitClient() {
  * 消息发送函数
  *
  */
-DWORD WINAPI SendThrea(LPVOID client_info) {
+void* WINAPI SendThrea(LPVOID client_info) {
   Client* client_detail = (struct _CLIENT_*)client_info;
   while (true) {
     WaitForSingleObject(&::client_mutex[client_detail->userId], INFINITE);
     while (::message_q[client_detail->userId].empty()) {
       //当消息队列为空
+      ::WaitForSingleObject(&::client_semaphore[client_detail->userId],
+                            INFINITE);
+      // ::WaitForSingleObject(&::client_mutex[client_detail->userId],INFINITE);
     }
     //发送消息
     while (!::message_q[client_detail->userId].empty()) {
@@ -175,6 +184,7 @@ DWORD WINAPI SendThrea(LPVOID client_info) {
             ::send(client_detail->socket, message_buffer.c_str(), trans_len, 0);
         if (retlen < 0) {
           perror("send");
+          return NULL;
         }
         size -= retlen;
         message_buffer.erase(0, retlen);
@@ -191,7 +201,7 @@ DWORD WINAPI SendThrea(LPVOID client_info) {
 /**
  * 消息接收线程
  */
-DWORD WINAPI RecvMessage(LPVOID client_info) {
+void* WINAPI RecvMessage(LPVOID client_info) {
   Client* client_detail = (struct _CLIENT_*)client_info;
 
   // message
@@ -218,13 +228,13 @@ DWORD WINAPI RecvMessage(LPVOID client_info) {
       message_len++;
       if (buffer[i] == '\n') {
         // sned to every client
-
         for (int j = 0; j < MAX_CLIENT_NUM; j++) {
           if (::client[j].status &&
               ::client[j].socket != client_detail->socket) {
             WaitForSingleObject(&::client_mutex[j], INFINITE);
             ::message_q[j].push(message_buffer);
             //信号量
+            ::ReleaseMutex(&::client_semaphore[j]);
             ::ReleaseMutex(&::client_mutex[j]);
           }
         }
@@ -232,14 +242,16 @@ DWORD WINAPI RecvMessage(LPVOID client_info) {
         message_len = 0;
       }
     }
-    ::memset(buffer,0,sizeof(buffer));
+    buffer_len = 0;
+    ::memset(buffer, 0, sizeof(buffer));
   }
+  return NULL;
 }
 
 /**
  * 聊天线程处理
  */
-DWORD ChatClientThrea(LPVOID client_info) {
+void* ChatClientThrea(LPVOID client_info) {
   ::Client* client_detail = (struct _CLIENT_*)client_info;
 
   // send welcome message
@@ -249,7 +261,8 @@ DWORD ChatClientThrea(LPVOID client_info) {
           client_detail->username, current_client_num);
   ::WaitForSingleObject(&client_mutex[client_detail->userId], INFINITE);
   ::message_q->push(welcome);
-  //
+  // signal a semaphore
+  ::ReleaseSemaphore(&::client_semaphore[client_detail->userId], 1, NULL);
   ::ReleaseMutex(&client_mutex[client_detail->userId]);
   memset(welcome, 0, sizeof(welcome));
   sprintf(welcome, "New User %s join in! Online User Number: %d\n",
@@ -259,13 +272,48 @@ DWORD ChatClientThrea(LPVOID client_info) {
     if (::client[j].status && client[j].socket != client_detail->socket) {
       ::WaitForSingleObject(&client_mutex[j], INFINITE);
       message_q[j].push(welcome);
-      // pthread_cond_signal(&cv[j]);
+      ::ReleaseSemaphore(&::client_semaphore[j], 1, NULL);
       ::ReleaseMutex(&client_mutex[j]);
     }
   }
   //创建发送线程
-  CreateThread(NULL, 0, SendThrea, (LPVOID)&client_detail, 0,
+  CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)SendThrea,
+               (LPVOID)client_detail, 0,
                &::send_thread[client_detail->userId]);
+  //接收消息
+  ::RecvMessage(client_info);
+
+  //因为recv()函数为阻塞运行模式，当接收消息函数返回时，那么这个用户已经下线
+  //加锁
+  ::current_client_num_mtx.lock();
+  client_detail->status = 0;
+  ::current_client_num--;
+  ::current_client_num_mtx.unlock();
+  //显示用户离开的消息
+  std::cout << client_detail->username
+            << "left the chat room.Online Person Number:"
+            << ::current_client_num << endl;
+  char bye[100];
+  sprintf(bye, "%s left the chat room. Online Person Number: %d\n",
+          client_detail->username, current_client_num);
+  //发送消息给其他人告诉该用户已经离线
+  for (int j = 0; j < MAX_CLIENT_NUM; j++) {
+    if (::client[j].status && ::client[j].socket != client_detail->socket) {
+      ::WaitForSingleObject(&::client_mutex[j], INFINITE);
+      message_q[j].push(bye);
+      ::ReleaseSemaphore(&::client_semaphore[j], 1, NULL);
+      ::ReleaseMutex(&::client_mutex[j]);
+    }
+  }
+
+  ::CloseHandle(&::client_mutex[client_detail->userId]);
+  ::CloseHandle(&::client_semaphore[client_detail->userId]);
+  ::TerminateThread(&send_thread[client_detail->userId], 0);
+  // pthread_cancel(send_thread[client_detail->userId]);
+  return NULL;
 }
 
-int main(void) { return 0; }
+int main(void) { 
+    Server server = Server();
+    server.WaitClient();
+  return 0; }
