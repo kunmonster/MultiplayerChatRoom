@@ -220,7 +220,7 @@ void* WINAPI RecvMessage(LPVOID client_info) {
       // the start of a new message
       if (message_len == 0) {
         char temp[100];
-        sprintf(temp, "s%:", client_detail->username);
+        sprintf(temp, "%s:", client_detail->username);
         message_buffer = temp;
         message_len = message_buffer.length();
       }
@@ -306,14 +306,15 @@ void* ChatClientThrea(LPVOID client_info) {
     }
   }
 
-  ::CloseHandle(&::client_mutex[client_detail->userId]);
-  ::CloseHandle(&::client_semaphore[client_detail->userId]);
+  ::CloseHandle(::client_mutex[client_detail->userId]);
+  ::CloseHandle(::client_semaphore[client_detail->userId]);
   ::TerminateThread(&send_thread[client_detail->userId], 0);
   // pthread_cancel(send_thread[client_detail->userId]);
   return NULL;
 }
 
 int main(void) { 
+    system("chcp 65001");
     Server server = Server();
     server.WaitClient();
   return 0; }

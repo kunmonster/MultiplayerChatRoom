@@ -182,6 +182,7 @@ Client::~Client() {
 }
 
 int main(void) {
+  system("chcp 65001");
   Client client = Client();
   return 0;
 }
