@@ -1,11 +1,12 @@
-#include <windows.h>
 #include <winsock2.h>
+#include <windows.h>
+
 
 #include <iostream>
 #include <limits>
 
 #include "client_detail.h"
-
+#pragma comment(lib, "ws2_32.lib") 
 using namespace std;
 
 char name[NAME_LEN + 1];
